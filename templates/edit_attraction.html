@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editar Experiencia - {{ attraction.name }} - Experiencias Expy Fest</title>
+    <!-- Tailwind CSS para un diseño rápido y limpio -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'expy-teal': '#00B4AA',
+                        'expy-green': '#009650',
+                        'expy-dark-green': '#50645A',
+                        'expy-purple': '#645A6E',
+                        'expy-yellow': '#FFF0B4',
+                        'expy-light-teal': '#B4F0F0',
+                        'expy-dark': '#323232'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg {
+            background: linear-gradient(135deg, #FFF0B4 0%, #B4F0F0 100%);
+        }
+        .expy-gradient {
+            background: linear-gradient(135deg, #00B4AA 0%, #645A6E 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="gradient-bg text-expy-dark">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <!-- Botón para volver al inicio -->
+        <a href="{{ url_for('index') }}" class="inline-block mb-6 text-expy-teal hover:text-expy-green font-semibold">&larr; Volver al Panel Principal</a>
+
+        <!-- Sección para mostrar mensajes flash -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="mb-6">
+                    {% for category, message in messages %}
+                        <div class="p-4 rounded-md {% if category == 'success' %}bg-green-50 border border-green-200 text-green-800{% elif category == 'error' %}bg-red-50 border border-red-200 text-red-800{% else %}bg-blue-50 border border-blue-200 text-blue-800{% endif %}">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <header class="mb-8 text-center">
+            <h1 class="text-4xl font-bold expy-gradient mb-2">Editar Experiencia</h1>
+            <p class="text-lg text-expy-dark-green">Modifica la información de la experiencia.</p>
+        </header>
+
+        <!-- Formulario de Edición -->
+        <div class="bg-white p-6 rounded-xl shadow-md">
+            <form action="{{ url_for('edit_attraction', attraction_id=attraction.id) }}" method="post" class="space-y-4">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-gray-700">Nombre de la Experiencia</label>
+                    <input type="text" id="name" name="name" required value="{{ attraction.name }}"
+                           class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+                <div>
+                    <label for="description" class="block text-sm font-medium text-gray-700">Descripción (Ubicación, detalles, etc.)</label>
+                    <textarea id="description" name="description" rows="3"
+                              class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">{{ attraction.description or '' }}</textarea>
+                </div>
+                <div>
+                    <label for="duration_minutes" class="block text-sm font-medium text-gray-700">Duración por persona (minutos)</label>
+                    <input type="number" id="duration_minutes" name="duration_minutes" min="1" max="60" value="{{ attraction.duration_minutes or 5 }}"
+                           class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+                <div class="flex space-x-4">
+                    <button type="submit"
+                            class="flex-1 flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-expy-teal hover:bg-expy-green focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-expy-teal">
+                        Guardar Cambios
+                    </button>
+                    <a href="{{ url_for('index') }}"
+                       class="flex-1 flex justify-center py-2 px-4 border border-expy-teal rounded-md shadow-sm text-sm font-medium text-expy-teal bg-white hover:bg-expy-light-teal focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-expy-teal">
+                        Cancelar
+                    </a>
+                </div>
+            </form>
+        </div>
+
+    </div>
+
+</body>
+</html>
