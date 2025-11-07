@@ -1,93 +1,115 @@
 # -----------------------------------------------------------------------------
-# EXPERIENCIAS EXPY FEST - GESTOR DE FILAS - app.py
+# EXPERIENCIAS EXPY FEST - GESTOR DE FILAS - app.py (CON POSTGRESQL)
 # -----------------------------------------------------------------------------
-# Este script crea una aplicación web local para gestionar las filas de
-# varias experiencias en el Festival de Experiencias Inmersivas Expy Fest.
-#
-# Para ejecutarlo:
-# 1. Asegúrate de tener Python instalado.
-# 2. Instala Flask: pip install Flask
-# 3. Guarda este archivo como 'app.py'.
-# 4. Crea una carpeta llamada 'templates' en el mismo directorio.
-# 5. Guarda los archivos 'index.html' y 'attraction.html' dentro de la carpeta 'templates'.
-# 6. Ejecuta el script desde tu terminal: python app.py
-# 7. Abre tu navegador y ve a http://127.0.0.1:5000
-#
-# Otros voluntarios en la misma red Wi-Fi podrán acceder usando la IP local
-# de tu computadora (ej: http://192.168.1.10:5000).
+# Versión mejorada con soporte para PostgreSQL (Railway) y SQLite (local)
 # -----------------------------------------------------------------------------
 
-import sqlite3
 import os
 from flask import Flask, render_template, request, redirect, url_for, flash
 
 # --- Configuración de la Aplicación ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'una-clave-secreta-muy-segura' # Necesario para el funcionamiento interno de Flask
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'una-clave-secreta-muy-segura-dev')
 
-DATABASE_FILE = 'event_attractions.db'
+# Detectar si estamos en Railway (tiene DATABASE_URL) o local (SQLite)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+USE_POSTGRES = DATABASE_URL is not None
 
 # --- Funciones de la Base de Datos ---
 
 def get_db_connection():
-    """Crea una conexión a la base de datos."""
-    conn = sqlite3.connect(DATABASE_FILE)
-    # Permite acceder a las columnas por su nombre (ej: row['name'])
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Crea una conexión a la base de datos (PostgreSQL o SQLite)."""
+    try:
+        if USE_POSTGRES:
+            # PostgreSQL (producción en Railway)
+            import psycopg2
+            import psycopg2.extras
+            conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+            # Esto hace que las filas se comporten como diccionarios
+            conn.cursor_factory = psycopg2.extras.RealDictCursor
+        else:
+            # SQLite (desarrollo local)
+            import sqlite3
+            conn = sqlite3.connect('event_attractions.db')
+            conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        print(f"Error de base de datos: {e}")
+        raise
+
+def execute_query(conn, query, params=None):
+    """Ejecuta una query compatible con ambas bases de datos."""
+    cursor = conn.cursor()
+    
+    if USE_POSTGRES:
+        # PostgreSQL usa %s como placeholder
+        query = query.replace('?', '%s')
+    
+    if params:
+        cursor.execute(query, params)
+    else:
+        cursor.execute(query)
+    
+    return cursor
 
 def init_db():
     """Inicializa la base de datos y crea las tablas si no existen."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Verificar si las tablas existen
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='attractions'")
-    if not cursor.fetchone():
-        print("Creando la base de datos por primera vez...")
+    if USE_POSTGRES:
+        # PostgreSQL
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS attractions (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                duration_minutes INTEGER DEFAULT 5
+            )
+        """)
         
-        # Tabla para las experiencias
-        cursor.execute('''
-            CREATE TABLE attractions (
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS queue (
+                id SERIAL PRIMARY KEY,
+                attraction_id INTEGER NOT NULL,
+                person_name TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (attraction_id) REFERENCES attractions (id)
+            )
+        """)
+        print("Base de datos PostgreSQL inicializada ✓")
+    else:
+        # SQLite
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS attractions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 description TEXT,
                 duration_minutes INTEGER DEFAULT 5
             )
-        ''')
-
-        # Tabla para las personas en la fila (queue)
-        cursor.execute('''
-            CREATE TABLE queue (
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 attraction_id INTEGER NOT NULL,
                 person_name TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (attraction_id) REFERENCES attractions (id)
             )
-        ''')
-        
-        print("Base de datos creada exitosamente.")
-    else:
-        # Verificar si la columna duration_minutes existe
-        cursor.execute("PRAGMA table_info(attractions)")
-        columns = [column[1] for column in cursor.fetchall()]
-        if 'duration_minutes' not in columns:
-            print("Actualizando base de datos existente...")
-            cursor.execute('ALTER TABLE attractions ADD COLUMN duration_minutes INTEGER DEFAULT 5')
-            print("Base de datos actualizada exitosamente.")
+        """)
+        print("Base de datos SQLite inicializada ✓")
 
     conn.commit()
     conn.close()
 
 
-# --- Rutas de la Aplicación (Las "Páginas") ---
+# --- Rutas de la Aplicación ---
 
 @app.route('/')
 def index():
     """Página principal: Muestra todas las experiencias y el número de personas en fila."""
     conn = get_db_connection()
-    # Consulta que une las experiencias con la cuenta de personas en su fila
     query = """
         SELECT
             a.id,
@@ -105,7 +127,8 @@ def index():
         ORDER BY
             a.name;
     """
-    attractions = conn.execute(query).fetchall()
+    cursor = execute_query(conn, query)
+    attractions = cursor.fetchall()
     conn.close()
     return render_template('index.html', attractions=attractions)
 
@@ -113,10 +136,13 @@ def index():
 def attraction_detail(attraction_id):
     """Página de detalle: Muestra la información de una experiencia y su fila."""
     conn = get_db_connection()
-    # Obtener datos de la experiencia
-    attraction = conn.execute('SELECT * FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
-    # Obtener la lista de personas en la fila, ordenadas por llegada
-    queue = conn.execute('SELECT * FROM queue WHERE attraction_id = ? ORDER BY timestamp', (attraction_id,)).fetchall()
+    
+    cursor = execute_query(conn, 'SELECT * FROM attractions WHERE id = ?', (attraction_id,))
+    attraction = cursor.fetchone()
+    
+    cursor = execute_query(conn, 'SELECT * FROM queue WHERE attraction_id = ? ORDER BY timestamp', (attraction_id,))
+    queue = cursor.fetchall()
+    
     conn.close()
 
     if attraction is None:
@@ -134,13 +160,16 @@ def add_attraction():
     if name:
         conn = get_db_connection()
         try:
-            conn.execute('INSERT INTO attractions (name, description, duration_minutes) VALUES (?, ?, ?)', 
-                        (name, description, duration_minutes))
+            execute_query(conn, 
+                'INSERT INTO attractions (name, description, duration_minutes) VALUES (?, ?, ?)', 
+                (name, description, duration_minutes))
             conn.commit()
             flash(f'Experiencia "{name}" creada exitosamente (duración: {duration_minutes} min)', 'success')
-        except sqlite3.IntegrityError:
-            # Manejar el caso de que el nombre ya exista
-            flash(f'Error: El nombre de la experiencia "{name}" ya existe.', 'error')
+        except Exception as e:
+            if 'unique' in str(e).lower() or 'duplicate' in str(e).lower():
+                flash(f'Error: El nombre de la experiencia "{name}" ya existe.', 'error')
+            else:
+                flash(f'Error al crear la experiencia: {str(e)}', 'error')
         finally:
             conn.close()
 
@@ -149,26 +178,37 @@ def add_attraction():
 @app.route('/add_to_queue/<int:attraction_id>', methods=['POST'])
 def add_to_queue(attraction_id):
     """Procesa el formulario para añadir una persona a la fila."""
-    person_name = request.form['person_name']
+    person_name = request.form.get('person_name', '').strip()
 
-    if person_name:
-        conn = get_db_connection()
-        
-        # Obtener información de la experiencia para calcular tiempo estimado
-        attraction = conn.execute('SELECT name, duration_minutes FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
-        
-        # Contar personas en la fila antes de añadir
-        queue_count = conn.execute('SELECT COUNT(*) as count FROM queue WHERE attraction_id = ?', (attraction_id,)).fetchone()['count']
-        
-        conn.execute('INSERT INTO queue (attraction_id, person_name) VALUES (?, ?)', (attraction_id, person_name))
-        conn.commit()
+    if not person_name:
+        flash('El nombre no puede estar vacío', 'error')
+        return redirect(url_for('attraction_detail', attraction_id=attraction_id))
+    
+    if len(person_name) < 2:
+        flash('El nombre debe tener al menos 2 caracteres', 'error')
+        return redirect(url_for('attraction_detail', attraction_id=attraction_id))
+
+    conn = get_db_connection()
+    
+    cursor = execute_query(conn, 'SELECT name, duration_minutes FROM attractions WHERE id = ?', (attraction_id,))
+    attraction = cursor.fetchone()
+    
+    if not attraction:
         conn.close()
-        
-        # Calcular tiempo estimado después de añadir
-        new_queue_count = queue_count + 1
-        estimated_wait = new_queue_count * (attraction['duration_minutes'] or 5)
-        
-        flash(f'{person_name} añadido a la fila. Tiempo estimado: {estimated_wait} minutos', 'success')
+        flash('Experiencia no encontrada', 'error')
+        return redirect(url_for('index'))
+    
+    cursor = execute_query(conn, 'SELECT COUNT(*) as count FROM queue WHERE attraction_id = ?', (attraction_id,))
+    queue_count = cursor.fetchone()['count']
+    
+    execute_query(conn, 'INSERT INTO queue (attraction_id, person_name) VALUES (?, ?)', (attraction_id, person_name))
+    conn.commit()
+    conn.close()
+    
+    new_queue_count = queue_count + 1
+    estimated_wait = new_queue_count * (attraction['duration_minutes'] or 5)
+    
+    flash(f'{person_name} añadido a la fila. Tiempo estimado: {estimated_wait} minutos', 'success')
 
     return redirect(url_for('attraction_detail', attraction_id=attraction_id))
 
@@ -176,12 +216,13 @@ def add_to_queue(attraction_id):
 def next_person(queue_id):
     """Elimina a la persona de la fila (simula que ya pasó)."""
     conn = get_db_connection()
-    # Primero, necesitamos saber a qué página de atracción redirigir
-    queue_item = conn.execute('SELECT attraction_id FROM queue WHERE id = ?', (queue_id,)).fetchone()
+    
+    cursor = execute_query(conn, 'SELECT attraction_id FROM queue WHERE id = ?', (queue_id,))
+    queue_item = cursor.fetchone()
 
     if queue_item:
         attraction_id = queue_item['attraction_id']
-        conn.execute('DELETE FROM queue WHERE id = ?', (queue_id,))
+        execute_query(conn, 'DELETE FROM queue WHERE id = ?', (queue_id,))
         conn.commit()
         conn.close()
         flash('Persona procesada', 'success')
@@ -194,7 +235,8 @@ def next_person(queue_id):
 def edit_attraction(attraction_id):
     """Página para editar una experiencia existente."""
     conn = get_db_connection()
-    attraction = conn.execute('SELECT * FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
+    cursor = execute_query(conn, 'SELECT * FROM attractions WHERE id = ?', (attraction_id,))
+    attraction = cursor.fetchone()
     
     if attraction is None:
         conn.close()
@@ -207,14 +249,18 @@ def edit_attraction(attraction_id):
         
         if name:
             try:
-                conn.execute('UPDATE attractions SET name = ?, description = ?, duration_minutes = ? WHERE id = ?', 
-                           (name, description, duration_minutes, attraction_id))
+                execute_query(conn, 
+                    'UPDATE attractions SET name = ?, description = ?, duration_minutes = ? WHERE id = ?', 
+                    (name, description, duration_minutes, attraction_id))
                 conn.commit()
                 conn.close()
                 flash(f'Experiencia "{name}" actualizada exitosamente (duración: {duration_minutes} min)', 'success')
                 return redirect(url_for('index'))
-            except sqlite3.IntegrityError:
-                flash(f'Error: El nombre de la experiencia "{name}" ya existe.', 'error')
+            except Exception as e:
+                if 'unique' in str(e).lower() or 'duplicate' in str(e).lower():
+                    flash(f'Error: El nombre de la experiencia "{name}" ya existe.', 'error')
+                else:
+                    flash(f'Error: {str(e)}', 'error')
                 conn.close()
                 return render_template('edit_attraction.html', attraction=attraction)
     
@@ -226,17 +272,16 @@ def delete_attraction(attraction_id):
     """Elimina una experiencia y todas las personas en su fila."""
     conn = get_db_connection()
     
-    # Verificar que la experiencia existe
-    attraction = conn.execute('SELECT * FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
+    cursor = execute_query(conn, 'SELECT * FROM attractions WHERE id = ?', (attraction_id,))
+    attraction = cursor.fetchone()
+    
     if attraction is None:
         conn.close()
         flash('Experiencia no encontrada', 'error')
         return redirect(url_for('index'))
     
-    # Eliminar todas las personas de la fila (CASCADE automático por FOREIGN KEY)
-    conn.execute('DELETE FROM queue WHERE attraction_id = ?', (attraction_id,))
-    # Eliminar la experiencia
-    conn.execute('DELETE FROM attractions WHERE id = ?', (attraction_id,))
+    execute_query(conn, 'DELETE FROM queue WHERE attraction_id = ?', (attraction_id,))
+    execute_query(conn, 'DELETE FROM attractions WHERE id = ?', (attraction_id,))
     conn.commit()
     conn.close()
     
@@ -248,23 +293,26 @@ def clear_queue(attraction_id):
     """Vacía completamente la fila de una experiencia."""
     conn = get_db_connection()
     
-    # Verificar que la experiencia existe
-    attraction = conn.execute('SELECT * FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
+    cursor = execute_query(conn, 'SELECT * FROM attractions WHERE id = ?', (attraction_id,))
+    attraction = cursor.fetchone()
+    
     if attraction is None:
         conn.close()
         flash('Experiencia no encontrada', 'error')
         return redirect(url_for('index'))
     
-    # Eliminar todas las personas de la fila
-    conn.execute('DELETE FROM queue WHERE attraction_id = ?', (attraction_id,))
+    execute_query(conn, 'DELETE FROM queue WHERE attraction_id = ?', (attraction_id,))
     conn.commit()
     conn.close()
     
     flash('Fila vaciada exitosamente', 'success')
     return redirect(url_for('attraction_detail', attraction_id=attraction_id))
 
+# --- Inicialización de la Base de Datos ---
+init_db()
+
 # --- Inicio de la Aplicación ---
 if __name__ == '__main__':
-    init_db()  # Asegurarse de que la base de datos esté lista
-    # host='0.0.0.0' hace la app visible en tu red local
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
